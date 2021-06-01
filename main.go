@@ -13,14 +13,26 @@ import (
 )
 
 var (
-	apiURL             = "https://dev.press.one/api/v2/nft/collections"
-	assetHost          string
-	contractAddress    string
-	authorizationToken string
-	bigoneURL          string
-	auctionUUID        string
-	tokenID            string
+	config Config
+	apiURL = "https://dev.press.one/api/v2/nft/collections"
 )
+
+type auctionConfig struct {
+	UUID            string `mapstructure:"uuid"`
+	ContractAddress string `mapstructure:"contract_address"`
+	TokenID         string `mapstructure:"token_id"`
+}
+
+type appConfig struct {
+	AuthorizationToken string `mapstructure:"authorization_token"`
+	BigONEUrl          string `mapstructure:"bigone_url"`
+	AssetHost          string `mapstructure:"asset_host"`
+}
+
+type Config struct {
+	Auctions []*auctionConfig `mapstructure:"auctions"`
+	App      *appConfig       `mapstructure:"app"`
+}
 
 type goods struct {
 	GUID     string `json:"guid"`
@@ -65,19 +77,17 @@ func initConfig() {
 	viper.AddConfigPath(".")
 	err := viper.ReadInConfig()
 	if err != nil {
+		log.Fatal(err)
+	}
+
+	err = viper.Unmarshal(&config)
+	if err != nil {
 		log.Fatalf("load config yaml error: %v", err)
 	}
-	authorizationToken = viper.GetString("app.authorization_token")
-	bigoneURL = viper.GetString("app.bigone_url")
-	assetHost = viper.GetString("app.asset_host")
-
-	auctionUUID = viper.GetString("auction.uuid")
-	contractAddress = viper.GetString("auction.contract_address")
-	tokenID = viper.GetString("auction.token_id")
 }
 
-func getAuction() (*auction, *goods, error) {
-	res, err := http.Get(fmt.Sprintf("%s/api/nft/v1/auctions/%s/detail", bigoneURL, auctionUUID))
+func getAuction(a *auctionConfig) (*auction, *goods, error) {
+	res, err := http.Get(fmt.Sprintf("%s/api/nft/v1/auctions/%s/detail", config.App.BigONEUrl, a.UUID))
 	if err != nil {
 		log.Fatal("get auction detail error: %s", err)
 	}
@@ -89,8 +99,8 @@ func getAuction() (*auction, *goods, error) {
 	return auctionRes.Data.Auction, auctionRes.Data.Goods, json.Unmarshal(body, &auctionRes)
 }
 
-func listBids() ([]*bid, error) {
-	res, err := http.Get(fmt.Sprintf("%s/api/nft/v1/auctions/%s/bids", bigoneURL, auctionUUID))
+func listBids(a *auctionConfig) ([]*bid, error) {
+	res, err := http.Get(fmt.Sprintf("%s/api/nft/v1/auctions/%s/bids", config.App.BigONEUrl, a.UUID))
 	if err != nil {
 		log.Fatal("get auction detail error: %s", err)
 	}
@@ -103,14 +113,14 @@ func listBids() ([]*bid, error) {
 
 }
 
-func postData(body []byte) error {
-	logrus.Info(string(body))
+func postData(auctionUUID string, body []byte) error {
+	logrus.Debug(string(body))
 	req, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(body))
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", fmt.Sprintf("Basic %s", authorizationToken))
+	req.Header.Set("Authorization", fmt.Sprintf("Basic %s", config.App.AuthorizationToken))
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -123,30 +133,29 @@ func postData(body []byte) error {
 	if err != nil {
 		return err
 	}
-	log.Infof("external url: %s", result["showcaseUrl"])
+	log.Infof("%s, external url: %s", auctionUUID, result["showcaseUrl"])
 	return nil
 }
 
-func main() {
-	initConfig()
-	auction, goods, err := getAuction()
+func submitAuction(a *auctionConfig) error {
+	auction, goods, err := getAuction(a)
 	if err != nil {
 		log.Fatal("get auction detail error: %s", err)
 	}
-	bids, err := listBids()
+	bids, err := listBids(a)
 	if err != nil {
 		log.Fatal("list bids error: %s", err)
 	}
 	attachments := make([]map[string]string, len(goods.Template.Attachments))
 	for i, attattachment := range goods.Template.Attachments {
 		attachments[i] = map[string]string{
-			"url": fmt.Sprintf("%s/%s", assetHost, attattachment.Path),
+			"url": fmt.Sprintf("%s/%s", config.App.AssetHost, attattachment.Path),
 		}
 	}
 	collectible := map[string]interface{}{
 		"uuid":             goods.GUID,
-		"contract_address": contractAddress,
-		"token_id":         tokenID,
+		"contract_address": a.ContractAddress,
+		"token_id":         a.TokenID,
 		"media":            attachments,
 	}
 	data := make(map[string]interface{})
@@ -173,7 +182,18 @@ func main() {
 	if err != nil {
 		log.Fatal("invalid json data: %s", err)
 	}
-	if err = postData(body); err != nil {
+	if err = postData(a.UUID, body); err != nil {
 		log.Fatal("post data error: %s", err)
 	}
+	return nil
+}
+
+func main() {
+	initConfig()
+	for _, a := range config.Auctions {
+		if err := submitAuction(a); err != nil {
+			log.Fatal("submit auction  error: %s", err)
+		}
+	}
+
 }
