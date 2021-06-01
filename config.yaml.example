@@ -1,0 +1,8 @@
+app:
+  authorization_token: "xxx=="
+  bigone_url: "https://nft-beta.big.zone"
+  asset_host: "https://static.big.zone"
+auction:
+  uuid: "5350b510-4d71-43f5-af7a-8c56147a55f3"
+  contract_address: "xxxx"
+  token_id: "xxxxx"
